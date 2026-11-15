@@ -1,0 +1,8 @@
+---
+profile: production
+exclude_paths:
+  - cloud-init.yaml
+skip_list:
+  # verify.yml uses curl on purpose: it tests the proxy and a direct
+  # connection that bypasses it, which get_url/uri can't express cleanly.
+  - command-instead-of-module

@@ -1,0 +1,74 @@
+---
+# The account you develop as inside the VM.
+dev_user: dev
+dev_user_shell: /bin/bash
+
+# Public SSH keys allowed to log in as dev_user. Password login is turned
+# off, so the play refuses to run with this list empty.
+# A hardware-backed key (ssh-keygen -t ed25519-sk) is the best choice.
+dev_user_ssh_pubkeys: []
+
+# Accept only FIDO2 hardware keys (sk-ssh-ed25519, sk-ecdsa) for SSH.
+ssh_require_sk_keys: false
+
+# Node.js and package managers
+node_major: 24
+npm_version: "12"
+pnpm_version: "11"
+# Days a package version must be public before npm will install it.
+npm_min_release_age_days: 3
+# Same rule for pnpm, in minutes (4320 = 3 days).
+pnpm_minimum_release_age_minutes: 4320
+
+# Egress control
+# true: outbound traffic is blocked except through the local allowlist proxy.
+egress_lockdown: true
+egress_proxy_port: 8888
+egress_allowlist_domains:
+  # Ubuntu packages ("*." also allows regional mirrors like us.archive.ubuntu.com)
+  - archive.ubuntu.com
+  - "*.archive.ubuntu.com"
+  - security.ubuntu.com
+  - ports.ubuntu.com
+  # Node.js
+  - registry.npmjs.org
+  - deb.nodesource.com
+  - nodejs.org
+  # Python
+  - pypi.org
+  - files.pythonhosted.org
+  # GitHub over HTTPS (git clone/push, API, release downloads)
+  - github.com
+  - api.github.com
+  - codeload.github.com
+  - objects.githubusercontent.com
+  # Container images
+  - ghcr.io
+  - pkg-containers.githubusercontent.com
+  - registry-1.docker.io
+  - auth.docker.io
+  - production.cloudflare.docker.com
+  # AI coding agent API (remove if you don't run one in the VM)
+  - api.anthropic.com
+# Add your own domains here instead of editing the list above.
+egress_allowlist_extra: []
+
+# Claude Code managed settings (/etc/claude-code/managed-settings.json).
+# Users can't override these. Check the current Claude Code settings
+# docs before adding keys.
+claude_managed_settings_enabled: true
+claude_managed_settings:
+  permissions:
+    disableBypassPermissionsMode: disable
+    deny:
+      - "Read(./.env)"
+      - "Read(./.env.*)"
+      - "Read(**/.env)"
+      - "Read(**/.env.*)"
+      - "Read(~/.ssh/**)"
+      - "Read(~/.aws/**)"
+      - "Read(~/.config/gh/**)"
+      - "Read(~/.config/gcloud/**)"
+      - "Read(~/.npmrc)"
+      - "Read(~/.git-credentials)"
+      - "Read(~/.docker/config.json)"

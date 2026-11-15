@@ -1,0 +1,93 @@
+---
+- name: Refuse to continue without an SSH key for the dev user
+  ansible.builtin.assert:
+    that:
+      - dev_user_ssh_pubkeys | length > 0
+    fail_msg: >-
+      Set dev_user_ssh_pubkeys in group_vars/all.yml. Password login is
+      disabled by this playbook, so without a key you would be locked out.
+
+- name: Update apt cache and upgrade installed packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: safe
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - acl
+      - ca-certificates
+      - curl
+      - git
+      - gnupg
+      - jq
+      - unzip
+      - python3
+      - unattended-upgrades
+      - nftables
+      - auditd
+      - tinyproxy
+    state: present
+
+- name: Turn on automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the dev user
+  ansible.builtin.user:
+    name: "{{ dev_user }}"
+    shell: "{{ dev_user_shell }}"
+    create_home: true
+    password: "!"
+    password_lock: true
+
+- name: Create the dev user's .ssh directory
+  ansible.builtin.file:
+    path: "/home/{{ dev_user }}/.ssh"
+    state: directory
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+    mode: "0700"
+
+- name: Install authorized SSH keys for the dev user
+  ansible.builtin.copy:
+    dest: "/home/{{ dev_user }}/.ssh/authorized_keys"
+    content: "{{ dev_user_ssh_pubkeys | join('\n') }}\n"
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+    mode: "0600"
+
+# The dev user gets no sudo rights on purpose. Code you run as dev
+# (install scripts, agents, test suites) can't become root. Admin work
+# goes through Ansible as the ubuntu user.
+- name: Make sure the dev user has no sudoers entry
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/90-{{ dev_user }}"
+    state: absent
+
+- name: Set safer git defaults for the dev user
+  ansible.builtin.shell: |
+    set -eu
+    if [ "$(git config --global --get {{ item.name }} || true)" != "{{ item.value }}" ]; then
+      git config --global {{ item.name }} {{ item.value }}
+      echo changed
+    fi
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ dev_user }}"
+  register: base_git_cfg
+  changed_when: "'changed' in base_git_cfg.stdout"
+  loop:
+    - { name: transfer.fsckObjects, value: "true" }
+    - { name: fetch.fsckObjects, value: "true" }
+    - { name: receive.fsckObjects, value: "true" }
+    - { name: protocol.file.allow, value: user }
+    - { name: protocol.ext.allow, value: never }

@@ -1,0 +1,3 @@
+---
+# Account Ansible uses to manage the VM. It keeps SSH access.
+ssh_hardening_admin_user: ubuntu

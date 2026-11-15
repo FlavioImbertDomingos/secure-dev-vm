@@ -1,0 +1,39 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (secure-dev-vm)
+flush ruleset
+
+table inet devbox {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iif "lo" accept
+    ct state established,related accept
+    ct state invalid drop
+    meta l4proto { icmp, ipv6-icmp } accept
+    tcp dport 22 accept
+    limit rate 5/minute log prefix "devbox-in-drop: " level info
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority filter; policy {{ 'drop' if egress_lockdown else 'accept' }};
+    oif "lo" accept
+    ct state established,related accept
+    meta l4proto { icmp, ipv6-icmp } accept
+
+    # DHCP lease renewal
+    udp sport 68 udp dport 67 accept
+    # DNS: only the system resolver talks to upstream servers.
+    # Programs ask systemd-resolved on 127.0.0.53, which is on lo.
+    meta skuid "systemd-resolve" udp dport 53 accept
+    meta skuid "systemd-resolve" tcp dport 53 accept
+    # Time sync
+    meta skuid "systemd-timesync" udp dport 123 accept
+    # The allowlist proxy is the only process allowed out on 80/443.
+    meta skuid "tinyproxy" tcp dport { 80, 443 } accept
+
+    limit rate 10/minute log prefix "devbox-egress-drop: " level info
+  }
+}

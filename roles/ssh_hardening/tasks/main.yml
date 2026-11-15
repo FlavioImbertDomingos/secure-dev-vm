@@ -1,0 +1,13 @@
+---
+- name: Install the sshd hardening drop-in
+  ansible.builtin.template:
+    src: 10-devbox.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-devbox.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ssh
+
+- name: Check the full sshd configuration is valid
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false

@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""repo-inspect: list the files in a repository that can make code run on
+your machine when you install, open, build or point an AI agent at it.
+
+Run it right after cloning and before npm/pnpm install, opening the folder
+in an editor, or starting an agent in it.
+
+Usage: repo-inspect [path]        (default: current directory)
+Exit code 1 when something is marked HIGH.
+"""
+import json
+import os
+import re
+import sys
+
+SKIP_DIRS = {"node_modules", ".git", "vendor", "dist", "build", ".venv", "venv", "__pycache__"}
+LIFECYCLE = ["preinstall", "install", "postinstall", "prepare", "preprepare",
+             "postprepare", "prepublish", "prepack", "postpack"]
+
+findings = []  # (level, path, message)
+
+
+def add(level, path, msg):
+    findings.append((level, path, msg))
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        # tolerate // comments used in VS Code and devcontainer files
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+        return json.loads(text)
+    except (OSError, ValueError):
+        return None
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def check_package_json(path):
+    data = load_json(path)
+    if not isinstance(data, dict):
+        return
+    scripts = data.get("scripts") or {}
+    for name in LIFECYCLE:
+        if name in scripts:
+            add("HIGH", path, f'lifecycle script "{name}": {scripts[name]}')
+    for field in ("dependencies", "devDependencies", "optionalDependencies"):
+        for dep, spec in (data.get(field) or {}).items():
+            if isinstance(spec, str) and re.match(r"^(git\+|git:|github:|https?:|file:)", spec):
+                add("REVIEW", path, f"{field}: {dep} comes from {spec}")
+
+
+def check_pm_config(path, name):
+    text = read(path)
+    rules = [
+        (r"ignore-scripts\s*=\s*false", "turns install scripts back on"),
+        (r"^\s*registry\s*=", "points npm at a different registry"),
+        (r"min(imum)?-?release-?age\s*[:=]\s*0\b", "turns off the release-age gate"),
+        (r"minimumReleaseAge\s*:\s*0\b", "turns off the release-age gate"),
+        (r"(allowBuilds|onlyBuiltDependencies|dangerouslyAllowAllBuilds)", "allows packages to run build scripts"),
+        (r"enableScripts\s*:\s*true", "turns Yarn install scripts on"),
+        (r"_authToken", "contains a registry token"),
+    ]
+    for pattern, msg in rules:
+        if re.search(pattern, text, flags=re.MULTILINE | re.IGNORECASE):
+            add("HIGH", path, f"{name} {msg}")
+
+
+def check_agent_settings(path):
+    data = load_json(path)
+    if not isinstance(data, dict):
+        add("REVIEW", path, "agent settings file (could not parse)")
+        return
+    if data.get("hooks"):
+        events = ", ".join(data["hooks"].keys()) if isinstance(data["hooks"], dict) else "?"
+        add("HIGH", path, f"agent hooks run commands on: {events}")
+    perms = data.get("permissions") or {}
+    allow = perms.get("allow") or []
+    if allow:
+        add("REVIEW", path, "pre-approves tools: " + ", ".join(map(str, allow[:8])))
+    if perms.get("defaultMode") in ("bypassPermissions", "acceptEdits"):
+        add("HIGH", path, f'sets permission mode "{perms.get("defaultMode")}"')
+    if data.get("mcpServers") or data.get("enableAllProjectMcpServers"):
+        add("HIGH", path, "starts MCP servers")
+
+
+def check_mcp(path):
+    data = load_json(path)
+    servers = (data or {}).get("mcpServers") or {}
+    for name, cfg in servers.items():
+        cmd = " ".join([str(cfg.get("command", ""))] + [str(a) for a in cfg.get("args", [])]) if isinstance(cfg, dict) else "?"
+        add("HIGH", path, f'MCP server "{name}" runs: {cmd.strip() or cfg.get("url", "?")}')
+
+
+def check_vscode_tasks(path):
+    data = load_json(path)
+    for task in (data or {}).get("tasks", []) or []:
+        if isinstance(task, dict) and (task.get("runOptions") or {}).get("runOn") == "folderOpen":
+            add("HIGH", path, f'task runs when the folder opens: {task.get("label")}: {task.get("command")}')
+
+
+def check_devcontainer(path):
+    text = read(path)
+    for key in ("initializeCommand", "onCreateCommand", "postCreateCommand",
+                "postStartCommand", "postAttachCommand", "updateContentCommand"):
+        if f'"{key}"' in text:
+            level = "HIGH" if key == "initializeCommand" else "REVIEW"
+            note = " (runs on the HOST, not in the container)" if key == "initializeCommand" else ""
+            add(level, path, f"{key} runs commands{note}")
+    if "docker.sock" in text:
+        add("HIGH", path, "mounts docker.sock (gives the container control of the host)")
+    if re.search(r'"privileged"\s*:\s*true|--privileged', text):
+        add("HIGH", path, "runs a privileged container")
+
+
+SIMPLE = {
+    ".envrc": ("HIGH", "direnv runs this when you cd into the folder"),
+    ".pre-commit-config.yaml": ("REVIEW", "git hook framework config"),
+    "lefthook.yml": ("REVIEW", "git hook framework config"),
+    ".gitmodules": ("REVIEW", "pulls in other repositories"),
+    "Makefile": ("INFO", "build commands"),
+    "justfile": ("INFO", "build commands"),
+    "setup.py": ("REVIEW", "runs Python code on pip install"),
+    "conftest.py": ("INFO", "runs when pytest starts"),
+    "CLAUDE.md": ("INFO", "instructions an AI agent will read"),
+    "AGENTS.md": ("INFO", "instructions an AI agent will read"),
+    ".cursorrules": ("INFO", "instructions an AI agent will read"),
+}
+
+
+def scan(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel = os.path.relpath(dirpath, root)
+        parts = set(rel.split(os.sep))
+        for fn in filenames:
+            path = os.path.join(dirpath, fn)
+            shown = os.path.relpath(path, root)
+            if fn == "package.json":
+                check_package_json(path)
+            elif fn in (".npmrc", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "bunfig.toml"):
+                check_pm_config(path, fn)
+            elif fn in ("settings.json", "settings.local.json") and (".claude" in parts or ".gemini" in parts):
+                check_agent_settings(path)
+            elif fn == ".mcp.json" or (fn == "mcp.json" and (".cursor" in parts or ".vscode" in parts)):
+                check_mcp(path)
+            elif fn == "tasks.json" and ".vscode" in parts:
+                check_vscode_tasks(path)
+            elif fn == "devcontainer.json":
+                check_devcontainer(path)
+            elif fn in SIMPLE:
+                level, msg = SIMPLE[fn]
+                add(level, path, msg)
+            elif ".husky" in parts or ".githooks" in parts:
+                add("REVIEW", path, "git hook script")
+            elif ".claude" in parts and ("commands" in parts or "agents" in parts or "skills" in parts):
+                add("INFO", path, "agent command, subagent or skill definition")
+    return [(lvl, os.path.relpath(p, root), m) for lvl, p, m in findings]
+
+
+def main():
+    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+    if not os.path.isdir(root):
+        print(f"repo-inspect: {root} is not a directory", file=sys.stderr)
+        return 2
+    results = scan(root)
+    order = {"HIGH": 0, "REVIEW": 1, "INFO": 2}
+    results.sort(key=lambda r: (order[r[0]], r[1]))
+    if not results:
+        print("Nothing found that runs code automatically. Still read the README before installing.")
+        return 0
+    current = None
+    for level, path, msg in results:
+        if level != current:
+            print(f"\n{level}")
+            current = level
+        print(f"  {path}: {msg}")
+    high = sum(1 for r in results if r[0] == "HIGH")
+    print(f"\n{high} HIGH item(s). Read each one before you install, open the folder in an editor, or start an agent here.")
+    return 1 if high else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

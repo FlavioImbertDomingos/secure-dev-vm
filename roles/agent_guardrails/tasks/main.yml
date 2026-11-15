@@ -1,0 +1,27 @@
+---
+- name: Install repo-inspect (lists files in a repo that can run code)
+  ansible.builtin.copy:
+    src: repo-inspect
+    dest: /usr/local/bin/repo-inspect
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the Claude Code managed settings directory
+  ansible.builtin.file:
+    path: /etc/claude-code
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: claude_managed_settings_enabled
+
+# Root-owned, so code running as the dev user can't loosen these rules.
+- name: Write Claude Code managed settings
+  ansible.builtin.copy:
+    dest: /etc/claude-code/managed-settings.json
+    content: "{{ claude_managed_settings | to_nice_json(indent=2) }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: claude_managed_settings_enabled

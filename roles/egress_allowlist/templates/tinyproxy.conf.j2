@@ -1,0 +1,24 @@
+# Managed by Ansible (secure-dev-vm)
+User tinyproxy
+Group tinyproxy
+Port {{ egress_proxy_port }}
+Listen 127.0.0.1
+Timeout 600
+DefaultErrorFile "/usr/share/tinyproxy/default.html"
+LogFile "/var/log/tinyproxy/tinyproxy.log"
+LogLevel Connect
+PidFile "/run/tinyproxy/tinyproxy.pid"
+MaxClients 100
+Allow 127.0.0.1
+Allow ::1
+DisableViaHeader Yes
+
+# Only allowlisted hosts. Everything else gets a 403 and a log line.
+Filter "/etc/tinyproxy/allowlist"
+FilterType ere
+FilterURLs Off
+FilterCaseSensitive Off
+FilterDefaultDeny Yes
+
+# HTTPS (CONNECT) only to port 443.
+ConnectPort 443

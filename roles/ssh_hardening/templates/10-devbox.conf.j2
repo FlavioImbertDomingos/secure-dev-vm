@@ -1,0 +1,26 @@
+# Managed by Ansible (secure-dev-vm). Loaded before 50-cloud-init.conf,
+# and for sshd the first value set wins.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers {{ [dev_user, ssh_hardening_admin_user] | unique | join(' ') }}
+
+# Never let the VM use the SSH agent on your laptop. With agent
+# forwarding on, anything running as you in the VM can sign with your keys.
+AllowAgentForwarding no
+# Editors like VS Code Remote-SSH need local port forwarding.
+AllowTcpForwarding local
+X11Forwarding no
+PermitUserEnvironment no
+PermitTunnel no
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+{% if ssh_require_sk_keys %}
+
+# Hardware keys only (YubiKey or other FIDO2 token).
+PubkeyAcceptedAlgorithms sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com
+{% endif %}

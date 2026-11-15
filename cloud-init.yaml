@@ -1,0 +1,9 @@
+#cloud-config
+# Used by: multipass launch 24.04 --name devbox --cloud-init cloud-init.yaml
+# Replace the key below with your laptop's public key (cat ~/.ssh/id_ed25519.pub)
+# so Ansible can log in as the ubuntu user.
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIReplaceWithYourPublicKey you@laptop
+package_update: true
+packages:
+  - python3

@@ -1,0 +1,76 @@
+---
+# Outbound traffic goes through one door: a local tinyproxy that only
+# connects to allowlisted domains. nftables drops everything else, so a
+# stealer can't send your tokens to its own server, and a dropped
+# connection gets logged.
+- name: Write the proxy domain allowlist
+  ansible.builtin.template:
+    src: allowlist.j2
+    dest: /etc/tinyproxy/allowlist
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart tinyproxy
+
+- name: Write the tinyproxy config
+  ansible.builtin.template:
+    src: tinyproxy.conf.j2
+    dest: /etc/tinyproxy/tinyproxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart tinyproxy
+
+- name: Start tinyproxy
+  ansible.builtin.systemd_service:
+    name: tinyproxy
+    state: started
+    enabled: true
+
+- name: Point every login shell at the proxy
+  ansible.builtin.template:
+    src: proxy-env.j2
+    dest: /etc/environment.d/90-devbox-proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Set the proxy in /etc/environment for non-systemd sessions
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: "^{{ item }}="
+    line: "{{ item }}=http://127.0.0.1:{{ egress_proxy_port }}"
+  loop: [http_proxy, https_proxy, HTTP_PROXY, HTTPS_PROXY]
+
+- name: Exclude localhost from the proxy
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: "^{{ item }}="
+    line: "{{ item }}=localhost,127.0.0.1,::1"
+  loop: [no_proxy, NO_PROXY]
+
+- name: Send apt through the proxy
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/90devbox-proxy
+    content: |
+      Acquire::http::Proxy "http://127.0.0.1:{{ egress_proxy_port }}";
+      Acquire::https::Proxy "http://127.0.0.1:{{ egress_proxy_port }}";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Write the nftables firewall
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Reload nftables
+
+- name: Enable nftables at boot
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: started
+    enabled: true

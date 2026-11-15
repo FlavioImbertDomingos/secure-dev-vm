@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Show which programs read credential files or changed startup files.
+# Usage: sudo cred-audit [start]   (start defaults to "today", e.g. "recent", "this-week")
+set -euo pipefail
+start="${1:-today}"
+
+for key in devbox_creds devbox_persist; do
+  echo "== ${key} since ${start} =="
+  if ! ausearch -k "${key}" --start "${start}" -i 2>/dev/null \
+      | awk '/^type=SYSCALL/ { for (i = 1; i <= NF; i++) if ($i ~ /^(comm|exe|auid|uid)=/) printf "%s ", $i; print "" }
+             /^type=PATH/ && /name=/ { for (i = 1; i <= NF; i++) if ($i ~ /^name=/) print "    " $i }' ; then
+    echo "  (no events)"
+  fi
+done

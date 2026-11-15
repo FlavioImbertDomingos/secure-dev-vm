@@ -1,0 +1,11 @@
+# Managed by Ansible (secure-dev-vm). One extended regex per line,
+# matched against the host name. Edit egress_allowlist_domains or
+# egress_allowlist_extra in group_vars instead of this file.
+# "example.com" matches only that host; "*.example.com" matches its subdomains.
+{% for domain in (egress_allowlist_domains + egress_allowlist_extra) | unique %}
+{% if domain.startswith('*.') %}
+^([a-z0-9-]+\.)+{{ domain[2:] | regex_escape }}$
+{% else %}
+^{{ domain | regex_escape }}$
+{% endif %}
+{% endfor %}

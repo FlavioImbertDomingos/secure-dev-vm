@@ -1,0 +1,31 @@
+---
+# Rootless Podman: no root daemon and no docker.sock to mount.
+# A container that gets docker.sock can start a privileged container
+# and take over the host, so this setup never creates one.
+- name: Install rootless Podman
+  ansible.builtin.apt:
+    name:
+      - podman
+      - uidmap
+      - passt
+      - fuse-overlayfs
+    state: present
+
+- name: Check the dev user has subordinate UID and GID ranges
+  ansible.builtin.command: "grep -q '^{{ dev_user }}:' {{ item }}"
+  loop:
+    - /etc/subuid
+    - /etc/subgid
+  register: containers_subid_check
+  changed_when: false
+  failed_when: false
+
+- name: Add subordinate UID and GID ranges for the dev user
+  ansible.builtin.command: "usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {{ dev_user }}"
+  when: containers_subid_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+  changed_when: true
+
+- name: Let the dev user's containers keep running after logout
+  ansible.builtin.command: "loginctl enable-linger {{ dev_user }}"
+  args:
+    creates: "/var/lib/systemd/linger/{{ dev_user }}"

@@ -1,0 +1,41 @@
+---
+# Log every read of the files credential stealers go after, so you can
+# answer "did anything touch my tokens?" after a bad install.
+- name: Create the credential paths so audit watches can attach
+  ansible.builtin.file:
+    path: "/home/{{ dev_user }}/{{ item }}"
+    state: directory
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+    mode: "0700"
+  loop:
+    - .ssh
+    - .aws
+    - .config
+    - .config/gh
+    - .config/gcloud
+    - .docker
+    - .config/systemd
+
+- name: Install audit rules for credential files
+  ansible.builtin.template:
+    src: 60-devbox-credentials.rules.j2
+    dest: /etc/audit/rules.d/60-devbox-credentials.rules
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Load audit rules
+
+- name: Install the cred-audit report command
+  ansible.builtin.copy:
+    src: cred-audit
+    dest: /usr/local/sbin/cred-audit
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Make sure auditd is running
+  ansible.builtin.systemd_service:
+    name: auditd
+    state: started
+    enabled: true

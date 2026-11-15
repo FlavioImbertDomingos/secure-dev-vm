@@ -1,0 +1,97 @@
+---
+# Proves the controls work instead of trusting that they were applied.
+# ansible-playbook verify.yml
+- name: Verify the hardened development VM
+  hosts: devbox
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the effective sshd settings
+      ansible.builtin.command: /usr/sbin/sshd -T
+      register: sshd_t
+      changed_when: false
+
+    - name: Check password login and agent forwarding are off
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in sshd_t.stdout_lines"
+          - "'allowagentforwarding no' in sshd_t.stdout_lines"
+          - "'permitrootlogin no' in sshd_t.stdout_lines"
+        quiet: true
+
+    - name: Check the dev user has no sudo rights
+      ansible.builtin.command: "sudo -l -U {{ dev_user }}"
+      register: dev_sudo
+      changed_when: false
+
+    - name: Assert no sudo for the dev user
+      ansible.builtin.assert:
+        that: "'not allowed to run sudo' in dev_sudo.stdout"
+        quiet: true
+
+    - name: Read npm and pnpm settings as the dev user
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "npm_age=$(npm config get min-release-age)"
+        echo "npm_major=$(npm --version | cut -d. -f1)"
+        echo "npm_strict=$(npm config get strict-allow-scripts)"
+        echo "pnpm_age=$(pnpm config get minimumReleaseAge)"
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ dev_user }}"
+      register: pm_cfg
+      changed_when: false
+
+    - name: Check the release-age gates and script blocking
+      ansible.builtin.assert:
+        that:
+          - "('npm_age=' ~ npm_min_release_age_days) in pm_cfg.stdout_lines"
+          - "('npm_major=' ~ npm_version) in pm_cfg.stdout_lines"
+          - "'npm_strict=true' in pm_cfg.stdout_lines"
+          - "('pnpm_age=' ~ pnpm_minimum_release_age_minutes) in pm_cfg.stdout_lines"
+        quiet: true
+
+    - name: Try an allowlisted site through the proxy
+      ansible.builtin.command: >-
+        curl -sS -o /dev/null -w '%{http_code}' --max-time 15
+        -x http://127.0.0.1:{{ egress_proxy_port }} https://registry.npmjs.org/
+      register: allowed
+      changed_when: false
+
+    - name: Try a site that is not on the allowlist through the proxy
+      ansible.builtin.command: >-
+        curl -sS -o /dev/null --max-time 15
+        -x http://127.0.0.1:{{ egress_proxy_port }} https://example.com/
+      register: blocked_proxy
+      changed_when: false
+      failed_when: false
+
+    - name: Try to bypass the proxy and connect directly
+      ansible.builtin.command: >-
+        curl -sS -o /dev/null --noproxy '*' --max-time 8 https://1.1.1.1/
+      register: blocked_direct
+      changed_when: false
+      failed_when: false
+
+    - name: Check egress control
+      ansible.builtin.assert:
+        that:
+          - allowed.stdout == '200'
+          - blocked_proxy.rc != 0
+          - (not egress_lockdown) or (blocked_direct.rc != 0)
+        quiet: true
+
+    - name: Check the credential audit rules are loaded
+      ansible.builtin.command: auditctl -l
+      register: audit_rules
+      changed_when: false
+
+    - name: Assert audit watches exist
+      ansible.builtin.assert:
+        that: "'devbox_creds' in audit_rules.stdout"
+        quiet: true
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "All checks passed: SSH, sudo, package managers, egress and audit."

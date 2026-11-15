@@ -1,0 +1,9 @@
+# Managed by Ansible (secure-dev-vm)
+# pnpm 11 reads non-auth settings from this file.
+
+# Minimum age in minutes before a new version can be installed.
+# pnpm 11 defaults to 1440 (one day); this raises it.
+minimumReleaseAge: {{ pnpm_minimum_release_age_minutes }}
+
+# Block transitive dependencies that point at git repos or tarball URLs.
+blockExoticSubdeps: true

@@ -1,0 +1,30 @@
+---
+# Hardened development VM for Ubuntu 24.04 LTS.
+# Order matters: the egress lockdown runs last so the earlier roles
+# can still download what they need on the first run.
+- name: Build a hardened development VM
+  hosts: devbox
+  become: true
+  pre_tasks:
+    - name: Check the target is Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['distribution_version'] is version('24.04', '>=')
+        fail_msg: "This playbook targets Ubuntu 24.04 LTS or newer."
+
+  roles:
+    - role: base
+      tags: [base]
+    - role: ssh_hardening
+      tags: [ssh]
+    - role: node_toolchain
+      tags: [node]
+    - role: containers
+      tags: [containers]
+    - role: credential_audit
+      tags: [audit]
+    - role: agent_guardrails
+      tags: [agents]
+    - role: egress_allowlist
+      tags: [egress]

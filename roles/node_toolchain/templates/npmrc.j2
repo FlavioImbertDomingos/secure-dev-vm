@@ -1,0 +1,25 @@
+# Managed by Ansible (secure-dev-vm). Written for npm 12.
+
+# npm 12 already skips dependency install scripts unless the package is in
+# "allowScripts" in package.json. This makes an unreviewed script fail the
+# install instead of printing a warning you might scroll past.
+# Review and approve: npm approve-scripts --allow-scripts-pending
+#                     npm approve-scripts <pkg>     (pins the exact version)
+# Don't add ignore-scripts=true: it also blocks the scripts you approved.
+strict-allow-scripts=true
+
+# Only install versions that have been public for at least this many days.
+# Bypass once for an urgent fix: npm install pkg@x.y.z --min-release-age=0
+min-release-age={{ npm_min_release_age_days }}
+
+# Dependencies can't come from git URLs or arbitrary tarball URLs.
+# (Both are npm 12 defaults; set here so a project .npmrc change stands out.)
+allow-git=none
+allow-remote=none
+
+# Record exact versions in package.json.
+save-exact=true
+
+# Keep tokens out of this file. Use npm login, or an
+# environment variable set only in CI:
+# //registry.npmjs.org/:_authToken=${NPM_TOKEN}
