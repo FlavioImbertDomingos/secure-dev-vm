@@ -42,6 +42,10 @@ egress_allowlist_domains:
   - api.github.com
   - codeload.github.com
   - objects.githubusercontent.com
+  - release-assets.githubusercontent.com
+  # Scanner rule and vulnerability data (security_tools role)
+  - semgrep.dev
+  - api.osv.dev
   # Container images
   - ghcr.io
   - pkg-containers.githubusercontent.com

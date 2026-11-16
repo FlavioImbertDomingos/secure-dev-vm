@@ -5,6 +5,8 @@
   hosts: devbox
   become: true
   gather_facts: false
+  vars_files:
+    - roles/security_tools/defaults/main.yml
   tasks:
     - name: Read the effective sshd settings
       ansible.builtin.command: /usr/sbin/sshd -T
@@ -92,6 +94,63 @@
         that: "'devbox_creds' in audit_rules.stdout"
         quiet: true
 
+    - name: Read scanner versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "trivy=$(trivy --version | awk '/^Version:/ {print $2}')"
+        echo "trufflehog=$(trufflehog --version 2>&1 | awk '{print $2}')"
+        echo "semgrep=$(semgrep --version)"
+        echo "skillspector=$(skillspector --version 2>&1 | awk '{print $2}')"
+      args:
+        executable: /bin/bash
+      register: tools_versions
+      changed_when: false
+
+    - name: Check each scanner is installed at its pinned version
+      ansible.builtin.assert:
+        that:
+          - "('trivy=' ~ security_tools_trivy_version) in tools_versions.stdout_lines"
+          - "('trufflehog=' ~ security_tools_trufflehog_version) in tools_versions.stdout_lines"
+          - "('semgrep=' ~ security_tools_semgrep_version) in tools_versions.stdout_lines"
+          - "('skillspector=' ~ security_tools_skillspector_version) in tools_versions.stdout_lines"
+        quiet: true
+
+    - name: Check the dev user's commits go through the secret-scanning hook
+      ansible.builtin.command: git config --global --get core.hooksPath
+      become: true
+      become_user: "{{ dev_user }}"
+      register: tools_hookspath
+      changed_when: false
+
+    - name: Assert the hook path
+      ansible.builtin.assert:
+        that: tools_hookspath.stdout == '/etc/devbox/git-hooks'
+        quiet: true
+
+    # A harmless fake AWS key that TruffleHog must flag. It's split in two
+    # and joined at run time, so the repo never holds a key-shaped string
+    # (GitHub push protection and secret scanners would rightly block it).
+    - name: Plant a fake AWS key
+      ansible.builtin.copy:
+        dest: /tmp/devbox-verify-secret.txt
+        content: |
+          aws_access_key_id = {{ 'AKIA' ~ 'QYLPMN5HHHFPZAM2' }}
+          aws_secret_access_key = {{ '1tUm636uS1yOEcfP5pvf' ~ 'qJ/ml36mF7AkyHsEU0IU' }}
+        mode: "0600"
+
+    - name: Scan the planted key with TruffleHog
+      ansible.builtin.command: >-
+        trufflehog filesystem /tmp/devbox-verify-secret.txt
+        --no-update --no-verification --fail
+      register: tools_trufflehog
+      changed_when: false
+      failed_when: tools_trufflehog.rc != 183
+
+    - name: Remove the planted key
+      ansible.builtin.file:
+        path: /tmp/devbox-verify-secret.txt
+        state: absent
+
     - name: Summary
       ansible.builtin.debug:
-        msg: "All checks passed: SSH, sudo, package managers, egress and audit."
+        msg: "All checks passed: SSH, sudo, package managers, egress, audit and scanners."

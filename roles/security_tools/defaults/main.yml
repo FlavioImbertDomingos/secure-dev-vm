@@ -1,0 +1,39 @@
+---
+# Every tool is pinned to a version that was at least 3 days old when it
+# was picked, and every download is checked against a SHA-256 recorded
+# here. A release that gets swapped or re-tagged later fails the install
+# instead of running. To upgrade: pick a release older than 3 days, copy
+# its checksums from the release page, update both values, rerun.
+#
+# Picked on 2026-11-16.
+
+security_tools_dir: /opt/devbox-tools
+
+security_tools_trivy_version: "0.76.2"            # released 2026-11-05
+security_tools_trivy_sha256:
+  x86_64: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+  aarch64: ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3
+
+security_tools_trufflehog_version: "3.99.9"       # released 2026-11-12
+security_tools_trufflehog_sha256:
+  x86_64: 12050095c8063bf4d34f9f6cbce6ba9fa8d0deea9d503d0570364feba093658e
+  aarch64: 778b1913196dc9b9234e8fd366f64387efeb08c01930a1d2110dcb2ffd07e68b
+
+# uv installs the two Python tools.
+security_tools_uv_version: "0.13.8"               # released 2026-11-12
+security_tools_uv_sha256:
+  x86_64: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91
+  aarch64: 74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585
+
+# Semgrep comes from PyPI. uv resolves it and its dependencies with
+# --exclude-newer, so nothing published in the last N days is installed.
+security_tools_semgrep_version: "1.185.0"         # released 2026-11-10
+security_tools_python_release_age_days: 3
+
+# SkillSpector is not on PyPI. It is installed from a pinned commit, and
+# its dependencies come from the project's own uv.lock (hash-checked).
+security_tools_skillspector_version: v2.13.4      # tagged 2026-11-05
+security_tools_skillspector_commit: 54824463814a0be01360792523ec7245a69190fc
+
+# Scan staged files for secrets on every commit.
+security_tools_secret_scan_hook: true

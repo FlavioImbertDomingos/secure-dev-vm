@@ -5,6 +5,16 @@
 - name: Build a hardened development VM
   hosts: devbox
   become: true
+  # Every download in this play goes through the VM's local proxy. On the
+  # first run the proxy has no filter yet; on later runs it enforces the
+  # allowlist, so the playbook obeys the same egress rules as you do.
+  environment:
+    http_proxy: "http://127.0.0.1:{{ egress_proxy_port }}"
+    https_proxy: "http://127.0.0.1:{{ egress_proxy_port }}"
+    HTTP_PROXY: "http://127.0.0.1:{{ egress_proxy_port }}"
+    HTTPS_PROXY: "http://127.0.0.1:{{ egress_proxy_port }}"
+    no_proxy: localhost,127.0.0.1,::1
+    NO_PROXY: localhost,127.0.0.1,::1
   pre_tasks:
     - name: Check the target is Ubuntu 24.04
       ansible.builtin.assert:
@@ -12,6 +22,24 @@
           - ansible_facts['distribution'] == 'Ubuntu'
           - ansible_facts['distribution_version'] is version('24.04', '>=')
         fail_msg: "This playbook targets Ubuntu 24.04 LTS or newer."
+
+    # tinyproxy must be running before anything downloads through it.
+    # First run only: the proxy isn't installed yet, so apt goes direct.
+    - name: Install the local proxy
+      ansible.builtin.shell: |
+        set -eu
+        apt-get -o Acquire::http::Proxy=DIRECT -o Acquire::https::Proxy=DIRECT update
+        DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::http::Proxy=DIRECT \
+          -o Acquire::https::Proxy=DIRECT install -y tinyproxy
+      args:
+        executable: /bin/bash
+        creates: /usr/bin/tinyproxy
+
+    - name: Make sure the proxy is running
+      ansible.builtin.systemd_service:
+        name: tinyproxy
+        state: started
+        enabled: true
 
   roles:
     - role: base
@@ -22,6 +50,8 @@
       tags: [node]
     - role: containers
       tags: [containers]
+    - role: security_tools
+      tags: [tools]
     - role: credential_audit
       tags: [audit]
     - role: agent_guardrails

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# preflight: run every pre-install check on a repo with one command.
+#
+#   repo-inspect   files that make code run on install, open or agent start
+#   trufflehog     secrets committed anywhere in the tree
+#   trivy          known-vulnerable dependencies and risky Dockerfiles/IaC
+#   skillspector   agent skills with hidden instructions or risky scripts
+#   semgrep        risky code patterns (only with --code; slower)
+#
+# Usage: preflight [--code] [path]      (default: current directory)
+# Exit code 1 if any check fails, 0 if all pass.
+set -uo pipefail
+
+run_code=0
+if [ "${1:-}" = "--code" ]; then run_code=1; shift; fi
+target="$(cd "${1:-.}" 2>/dev/null && pwd)" || { echo "preflight: no such directory: ${1:-.}" >&2; exit 2; }
+
+export TRIVY_DISABLE_TELEMETRY=true TRIVY_SKIP_VERSION_CHECK=true
+export TRIVY_DB_REPOSITORY="${TRIVY_DB_REPOSITORY:-ghcr.io/aquasecurity/trivy-db:2}"
+export TRIVY_JAVA_DB_REPOSITORY="${TRIVY_JAVA_DB_REPOSITORY:-ghcr.io/aquasecurity/trivy-java-db:1}"
+export SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0
+
+declare -a summary
+failed=0
+
+step() {  # step <name> <command...>
+  local name="$1"; shift
+  printf '\n\033[1m== %s\033[0m\n' "$name"
+  "$@"
+  local rc=$?
+  if [ $rc -eq 0 ]; then summary+=("PASS  $name"); else summary+=("FAIL  $name"); failed=1; fi
+}
+
+step "repo-inspect (code that runs automatically)" repo-inspect "$target"
+
+# --no-verification: never send found secrets to provider APIs to test them.
+step "trufflehog (secrets)" trufflehog filesystem "$target" \
+  --no-update --no-verification --fail \
+  --exclude-paths <(printf '%s\n' 'node_modules/' '\.git/' '\.venv/')
+
+step "trivy (vulnerable dependencies, misconfigurations)" trivy fs "$target" \
+  --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 --quiet \
+  --skip-dirs node_modules --skip-dirs .venv
+
+# Agent skills: any folder holding a SKILL.md, outside dependency folders.
+mapfile -t skills < <(find "$target" \( -name node_modules -o -name .git -o -name .venv \) -prune -o \
+  -name SKILL.md -print 2>/dev/null | xargs -r -n1 dirname | sort -u)
+if [ ${#skills[@]} -gt 0 ]; then
+  for s in "${skills[@]}"; do
+    step "skillspector ${s#"$target"/}" skillspector scan "$s" --no-llm --fail-on-findings
+  done
+else
+  summary+=("SKIP  skillspector (no SKILL.md found)")
+fi
+
+if [ $run_code -eq 1 ]; then
+  step "semgrep (code patterns)" semgrep scan --config p/default --metrics off --error --quiet "$target"
+else
+  summary+=("SKIP  semgrep (add --code to run it)")
+fi
+
+printf '\n\033[1m== Summary for %s\033[0m\n' "$target"
+printf '  %s\n' "${summary[@]}"
+if [ $failed -ne 0 ]; then
+  echo "Read every FAIL before you install, open this folder in an editor, or start an agent here."
+fi
+exit $failed

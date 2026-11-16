@@ -1,0 +1,199 @@
+---
+- name: Check the CPU architecture is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+    fail_msg: "security_tools supports x86_64 and aarch64 (Apple Silicon VMs) only."
+
+- name: Set architecture names used by each project's release files
+  ansible.builtin.set_fact:
+    security_tools_arch: "{{ ansible_facts['architecture'] }}"
+    security_tools_trivy_arch: "{{ {'x86_64': '64bit', 'aarch64': 'ARM64'}[ansible_facts['architecture']] }}"
+    security_tools_trufflehog_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+
+- name: Build release download URLs
+  ansible.builtin.set_fact:
+    security_tools_trivy_url: >-
+      https://github.com/aquasecurity/trivy/releases/download/v{{ security_tools_trivy_version }}/trivy_{{
+      security_tools_trivy_version }}_Linux-{{ security_tools_trivy_arch }}.tar.gz
+    security_tools_trufflehog_url: >-
+      https://github.com/trufflesecurity/trufflehog/releases/download/v{{ security_tools_trufflehog_version }}/trufflehog_{{
+      security_tools_trufflehog_version }}_linux_{{ security_tools_trufflehog_arch }}.tar.gz
+    security_tools_uv_url: >-
+      https://github.com/astral-sh/uv/releases/download/{{ security_tools_uv_version }}/uv-{{
+      security_tools_arch }}-unknown-linux-gnu.tar.gz
+
+- name: Create tool directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ security_tools_dir }}"
+    - "{{ security_tools_dir }}/downloads"
+    - "{{ security_tools_dir }}/trivy-{{ security_tools_trivy_version }}"
+    - "{{ security_tools_dir }}/trufflehog-{{ security_tools_trufflehog_version }}"
+    - "{{ security_tools_dir }}/uv-{{ security_tools_uv_version }}"
+    - "{{ security_tools_dir }}/uv-tools"
+
+# Binary releases: download, check SHA-256, unpack, link into /usr/local/bin.
+- name: Download Trivy (checksum pinned)
+  ansible.builtin.get_url:
+    url: "{{ security_tools_trivy_url }}"
+    dest: "{{ security_tools_dir }}/downloads/trivy-{{ security_tools_trivy_version }}-{{ security_tools_arch }}.tar.gz"
+    checksum: "sha256:{{ security_tools_trivy_sha256[security_tools_arch] }}"
+    mode: "0644"
+
+- name: Download TruffleHog (checksum pinned)
+  ansible.builtin.get_url:
+    url: "{{ security_tools_trufflehog_url }}"
+    dest: "{{ security_tools_dir }}/downloads/trufflehog-{{ security_tools_trufflehog_version }}-{{ security_tools_arch }}.tar.gz"
+    checksum: "sha256:{{ security_tools_trufflehog_sha256[security_tools_arch] }}"
+    mode: "0644"
+
+- name: Download uv (checksum pinned)
+  ansible.builtin.get_url:
+    url: "{{ security_tools_uv_url }}"
+    dest: "{{ security_tools_dir }}/downloads/uv-{{ security_tools_uv_version }}-{{ security_tools_arch }}.tar.gz"
+    checksum: "sha256:{{ security_tools_uv_sha256[security_tools_arch] }}"
+    mode: "0644"
+
+- name: Unpack Trivy
+  ansible.builtin.unarchive:
+    src: "{{ security_tools_dir }}/downloads/trivy-{{ security_tools_trivy_version }}-{{ security_tools_arch }}.tar.gz"
+    dest: "{{ security_tools_dir }}/trivy-{{ security_tools_trivy_version }}"
+    remote_src: true
+    creates: "{{ security_tools_dir }}/trivy-{{ security_tools_trivy_version }}/trivy"
+
+- name: Unpack TruffleHog
+  ansible.builtin.unarchive:
+    src: "{{ security_tools_dir }}/downloads/trufflehog-{{ security_tools_trufflehog_version }}-{{ security_tools_arch }}.tar.gz"
+    dest: "{{ security_tools_dir }}/trufflehog-{{ security_tools_trufflehog_version }}"
+    remote_src: true
+    creates: "{{ security_tools_dir }}/trufflehog-{{ security_tools_trufflehog_version }}/trufflehog"
+
+- name: Unpack uv
+  ansible.builtin.unarchive:
+    src: "{{ security_tools_dir }}/downloads/uv-{{ security_tools_uv_version }}-{{ security_tools_arch }}.tar.gz"
+    dest: "{{ security_tools_dir }}/uv-{{ security_tools_uv_version }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    creates: "{{ security_tools_dir }}/uv-{{ security_tools_uv_version }}/uv"
+
+- name: Link binaries into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "/usr/local/bin/{{ item.name }}"
+    state: link
+    force: true
+  loop:
+    - { name: trivy, src: "{{ security_tools_dir }}/trivy-{{ security_tools_trivy_version }}/trivy" }
+    - { name: trufflehog, src: "{{ security_tools_dir }}/trufflehog-{{ security_tools_trufflehog_version }}/trufflehog" }
+    - { name: uv, src: "{{ security_tools_dir }}/uv-{{ security_tools_uv_version }}/uv" }
+
+# Python tools
+- name: Read the installed Semgrep version
+  ansible.builtin.command: /usr/local/bin/semgrep --version
+  register: security_tools_semgrep_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install Semgrep with a release-age cutoff on every dependency
+  ansible.builtin.command: >-
+    /usr/local/bin/uv tool install --force
+    --exclude-newer {{ '%Y-%m-%dT00:00:00Z' | strftime(ansible_facts['date_time']['epoch'] | int - security_tools_python_release_age_days * 86400) }}
+    semgrep=={{ security_tools_semgrep_version }}
+  environment:
+    UV_TOOL_DIR: "{{ security_tools_dir }}/uv-tools"
+    UV_TOOL_BIN_DIR: /usr/local/bin
+    UV_PYTHON: /usr/bin/python3
+    UV_PYTHON_DOWNLOADS: never
+  when: security_tools_semgrep_installed.stdout | default('') | trim != security_tools_semgrep_version
+  changed_when: true
+
+- name: Check out SkillSpector at the pinned commit
+  ansible.builtin.git:
+    repo: https://github.com/NVIDIA/SkillSpector.git
+    dest: "{{ security_tools_dir }}/skillspector"
+    version: "{{ security_tools_skillspector_commit }}"
+    force: true
+  register: security_tools_skillspector_src
+
+- name: Install SkillSpector from its lockfile
+  ansible.builtin.command: /usr/local/bin/uv sync --frozen --no-dev
+  args:
+    chdir: "{{ security_tools_dir }}/skillspector"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ security_tools_dir }}/skillspector/.venv"
+    UV_PYTHON: /usr/bin/python3
+    UV_PYTHON_DOWNLOADS: never
+  when: security_tools_skillspector_src.changed or not (security_tools_dir ~ '/skillspector/.venv/bin/skillspector') is file
+  changed_when: true
+
+- name: Link SkillSpector into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ security_tools_dir }}/skillspector/.venv/bin/skillspector"
+    dest: /usr/local/bin/skillspector
+    state: link
+    force: true
+
+# Defaults for every login shell: no telemetry, no update checks,
+# Trivy's database from GHCR (already on the egress allowlist).
+- name: Set scanner defaults for login shells
+  ansible.builtin.copy:
+    dest: /etc/profile.d/devbox-scanners.sh
+    content: |
+      # Managed by Ansible (secure-dev-vm)
+      export TRIVY_DISABLE_TELEMETRY=true
+      export TRIVY_SKIP_VERSION_CHECK=true
+      export TRIVY_DB_REPOSITORY=ghcr.io/aquasecurity/trivy-db:2
+      export TRIVY_JAVA_DB_REPOSITORY=ghcr.io/aquasecurity/trivy-java-db:1
+      export SEMGREP_SEND_METRICS=off
+      export SEMGREP_ENABLE_VERSION_CHECK=0
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the preflight command
+  ansible.builtin.copy:
+    src: preflight
+    dest: /usr/local/bin/preflight
+    owner: root
+    group: root
+    mode: "0755"
+
+# Secret scanning on commit, for every repo the dev user works in.
+- name: Create the shared git hooks directory
+  ansible.builtin.file:
+    path: /etc/devbox/git-hooks
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_tools_secret_scan_hook
+
+- name: Install the secret-scanning pre-commit hook
+  ansible.builtin.copy:
+    src: pre-commit
+    dest: /etc/devbox/git-hooks/pre-commit
+    owner: root
+    group: root
+    mode: "0755"
+  when: security_tools_secret_scan_hook
+
+- name: Point the dev user's git at the shared hooks
+  ansible.builtin.shell: |
+    set -eu
+    if [ "$(git config --global --get core.hooksPath || true)" != "/etc/devbox/git-hooks" ]; then
+      git config --global core.hooksPath /etc/devbox/git-hooks
+      echo changed
+    fi
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ dev_user }}"
+  register: security_tools_hookspath
+  changed_when: "'changed' in security_tools_hookspath.stdout"
+  when: security_tools_secret_scan_hook
